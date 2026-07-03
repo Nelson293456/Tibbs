@@ -80,8 +80,9 @@ cv.width = W; cv.height = H;
 function fitCanvas(){
   const pad = 12;
   const s = Math.min((innerWidth - pad) / W, (innerHeight - pad) / H);
-  cv.style.width  = Math.floor(W * s) + 'px';
-  cv.style.height = Math.floor(H * s) + 'px';
+  // keep the exact W:H ratio so pointer mapping stays uniform on both axes
+  cv.style.width  = (W * s) + 'px';
+  cv.style.height = (H * s) + 'px';
 }
 addEventListener('resize', fitCanvas); fitCanvas();
 
@@ -309,7 +310,8 @@ function openNameOverlay(){
   const F = fb();
   const msg = document.getElementById('ovlMsg');
   document.getElementById('nameInput').value = (window.FB && window.FB.name) || '';
-  msg.textContent = F ? (window.FB.isAnon ? 'guest account \u00b7 sign in to keep your score on any device' : 'signed in with Google') : 'leaderboard is offline \u2014 add your Firebase config to enable';
+  const offlineReason = (window.FB && window.FB.offlineReason) || 'add your Firebase config to enable';
+  msg.textContent = F ? (window.FB.isAnon ? 'guest account \u00b7 sign in to keep your score on any device' : 'signed in with Google') : ('leaderboard offline \u2014 ' + offlineReason);
   document.getElementById('googleBtn').style.display = (F && window.FB.isAnon) ? 'block' : 'none';
   document.getElementById('ovl').style.display = 'flex';
 }
@@ -323,11 +325,14 @@ document.getElementById('saveNameBtn').onclick = async ()=>{
 };
 document.getElementById('googleBtn').onclick = async ()=>{
   const F = fb();
-  if (!F) return;
   const msg = document.getElementById('ovlMsg');
+  if (!F){ msg.textContent = (window.FB && window.FB.offlineReason) || 'sign-in unavailable offline'; return; }
   msg.textContent = 'opening Google sign-in...';
   try{ await F.signInGoogle(); msg.textContent = 'signed in!'; document.getElementById('googleBtn').style.display='none'; }
-  catch(e){ msg.textContent = 'sign-in failed \u2014 ' + (e && e.code ? e.code : 'try again'); }
+  catch(e){
+    const code = e && (e.code || e.message) ? (e.code || e.message) : 'try again';
+    msg.textContent = 'sign-in failed \u2014 ' + code;
+  }
 };
 
 function grassRow(r, dense){
@@ -1184,6 +1189,18 @@ function roundRect(x,y,w,h,r){
   cx.moveTo(x+r,y); cx.arcTo(x+w,y,x+w,y+h,r); cx.arcTo(x+w,y+h,x,y+h,r);
   cx.arcTo(x,y+h,x,y,r); cx.arcTo(x,y,x+w,y,r); cx.closePath();
 }
+function wrapText(text, cxpos, y, maxW, lh){
+  const words = String(text).split(' ');
+  let line = '', lines = [];
+  for (const w of words){
+    const test = line ? line+' '+w : w;
+    if (cx.measureText(test).width > maxW && line){ lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  const startY = y - (lines.length-1)*lh/2;
+  lines.forEach((l,i)=> cx.fillText(l, cxpos, startY + i*lh));
+}
 function drawHUD(){
   // fish count
   chip(10, 10, 118, 40);
@@ -1374,10 +1391,10 @@ function drawBoard(){
   } else if (board.error){
     cx.fillStyle='rgba(255,255,255,0.7)';
     if (board.error==='offline'){
-      cx.fillText('leaderboard offline', W/2, py+ph/2-16);
+      cx.fillText('leaderboard offline', W/2, py+ph/2-30);
       cx.fillStyle='#9fb2cc';
-      cx.fillText('add your Firebase config', W/2, py+ph/2+10);
-      cx.fillText('to turn it on', W/2, py+ph/2+30);
+      const reason = (window.FB && window.FB.offlineReason) || 'add your Firebase config to turn it on';
+      wrapText(reason, W/2, py+ph/2, pw-64, 20);
     } else cx.fillText(board.error, W/2, py+ph/2);
   } else if (board.rows && board.rows.length){
     const rowH = 40, top = py+84;
@@ -1567,11 +1584,22 @@ addEventListener('keydown', e=>{
 
 let touchStart = null;
 const inRect = (x,y,r)=> r && x>r.x && x<r.x+r.w && y>r.y && y<r.y+r.h;
+// map a screen pointer to canvas coordinates, correcting for any CSS
+// rounding / letterboxing so button hitboxes line up with what's drawn
+function toCanvas(e){
+  const rect = cv.getBoundingClientRect();
+  const scale = Math.min(rect.width / W, rect.height / H);
+  const drawnW = W * scale, drawnH = H * scale;
+  const offX = (rect.width  - drawnW) / 2;
+  const offY = (rect.height - drawnH) / 2;
+  return {
+    x: (e.clientX - rect.left - offX) / scale,
+    y: (e.clientY - rect.top  - offY) / scale,
+  };
+}
 cv.addEventListener('pointerdown', e=>{
   audio();
-  const rect = cv.getBoundingClientRect();
-  const x = (e.clientX-rect.left) * (W/rect.width);
-  const y = (e.clientY-rect.top) * (H/rect.height);
+  const {x, y} = toCanvas(e);
   if (state==='board'){
     if (inRect(x,y,btnRects.back)) state = prevState;
     return;
@@ -1638,11 +1666,19 @@ const FIREBASE_CONFIG = {
 
 const CONFIGURED = !String(FIREBASE_CONFIG.apiKey).startsWith('PASTE');
 window.FB = { configured:false, ready:false, uid:null, name:null, isAnon:true,
-              metaLoaded:false, meta:null,
-              async signInGoogle(){}, async setName(){}, async submit(){}, async top(){ return []; },
+              metaLoaded:false, meta:null, offlineReason:null,
+              async signInGoogle(){ throw new Error(window.FB.offlineReason || 'offline'); },
+              async setName(){}, async submit(){}, async top(){ return []; },
               async saveMeta(){} };
 
-if (CONFIGURED) try {
+// Firebase Auth + Google sign-in refuse to run from a file:// page
+// (origin is "null"). Detect that early and report it clearly.
+if (location.protocol === 'file:'){
+  window.FB.offlineReason = 'Open the game from a web address (http/https), not a file on disk — Firebase blocks file:// pages.';
+  console.warn('[MrTibbs] ' + window.FB.offlineReason);
+}
+
+if (CONFIGURED && location.protocol !== 'file:') try {
   const V = '10.12.2';
   const [{ initializeApp }, A, F] = await Promise.all([
     import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
@@ -1729,6 +1765,7 @@ if (CONFIGURED) try {
     } catch(e){}
   };
 } catch(e){
+  window.FB.offlineReason = 'Could not reach Firebase. Check your internet connection and that the config values are correct.';
   console.warn('Firebase failed to load — leaderboard offline.', e);
 }
 </script>
