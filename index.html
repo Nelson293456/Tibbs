@@ -1660,6 +1660,7 @@ requestAnimationFrame(frame);
 const FIREBASE_CONFIG = {
   apiKey:            "AIzaSyAt17fLpjTomxDMp5kJCiT-aKHjeex82Rs",
   authDomain:        "tibs-37fc2.firebaseapp.com",
+  databaseURL:      "https://tibs-37fc2-default-rtdb.firebaseio.com",
   projectId:         "tibs-37fc2",
   appId:             "1:1026584194746:web:b4fd4f03d58959b87e1c83",
 };
@@ -1680,14 +1681,14 @@ if (location.protocol === 'file:'){
 
 if (CONFIGURED && location.protocol !== 'file:') try {
   const V = '10.12.2';
-  const [{ initializeApp }, A, F] = await Promise.all([
+  const [{ initializeApp }, A, R] = await Promise.all([
     import(`https://www.gstatic.com/firebasejs/${V}/firebase-app.js`),
     import(`https://www.gstatic.com/firebasejs/${V}/firebase-auth.js`),
-    import(`https://www.gstatic.com/firebasejs/${V}/firebase-firestore.js`),
+    import(`https://www.gstatic.com/firebasejs/${V}/firebase-database.js`),
   ]);
   const app  = initializeApp(FIREBASE_CONFIG);
   const auth = A.getAuth(app);
-  const db   = F.getFirestore(app);
+  const db   = R.getDatabase(app);
   const FB   = window.FB;
   FB.configured = true;
   let serverBest = 0;
