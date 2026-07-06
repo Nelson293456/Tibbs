@@ -328,6 +328,7 @@ function saveMeta(){
       bank, chars:Object.keys(unlocked), sel:CHARS[selChar].id, items,
       achieved:Object.keys(achieved),
       dayStreak, bestDayStreak, lastDailyDate, bestDailyRank,
+      dailyDoneDate, dailyDoneScore,
     }).catch(()=>{});
   }catch(e){}
 }
@@ -342,10 +343,12 @@ let items = { life:0, dblfish:0, boost:0 };     // owned consumables
 
 /* ---- daily streak ---- */
 let dayStreak = 0, bestDayStreak = 0, lastDailyDate = null, bestDailyRank = 0;
+let dailyDoneDate = null, dailyDoneScore = 0;   // once-per-day lock + today's result
 function yesterdayStr(){
   const d = new Date(); d.setUTCDate(d.getUTCDate()-1);
   return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0');
 }
+function dailyLocked(){ return dailyDoneDate === todayStr(); }
 function registerDailyPlayed(){
   const today = todayStr();
   if (lastDailyDate === today) return;              // already counted today
@@ -977,6 +980,11 @@ function die(cause){
       const bonus = Math.ceil(coinsGot * 0.5);
       bank += bonus;
       effects.push({kind:'banner', text:'DAILY BONUS +'+bonus, t:0, dur:1.6});
+    }
+    if (dailyMode){
+      // lock today's daily — one run per day
+      dailyDoneDate = dailyDate;
+      dailyDoneScore = maxRow;
     }
     submitScore();
     saveMeta();
@@ -1916,15 +1924,28 @@ function drawTitle(){
   // daily run button
   const dw=300, dh=48, dxx=(W-dw)/2, dyy=H*0.755;
   btnRects.daily = {x:dxx, y:dyy, w:dw, h:dh};
-  const dp = 0.85+0.15*Math.sin(titleBob*4);
-  cx.fillStyle=`rgba(232,87,77,${dp})`;
-  roundRect(dxx,dyy,dw,dh,12); cx.fill();
-  cx.fillStyle='#fff'; cx.font='13px "Press Start 2P", monospace';
+  const locked = dailyLocked();
   cx.textBaseline='middle';
-  cx.fillText('\u2600 DAILY RUN', W/2, dyy+dh/2+1);
-  cx.font='7px "Press Start 2P", monospace';
-  cx.fillStyle='rgba(255,255,255,0.8)';
-  cx.fillText('same world for everyone \u00b7 +50% fish', W/2, dyy+dh-6);
+  if (locked){
+    // already played today — muted "done" state that opens the board
+    cx.fillStyle='rgba(70,90,80,0.85)';
+    roundRect(dxx,dyy,dw,dh,12); cx.fill();
+    cx.fillStyle='#7ec850'; cx.font='13px "Press Start 2P", monospace';
+    cx.fillText('\u2713 DAILY DONE \u00b7 '+dailyDoneScore, W/2, dyy+dh/2-4);
+    cx.font='7px "Press Start 2P", monospace';
+    cx.fillStyle='rgba(255,255,255,0.65)';
+    cx.fillText('come back tomorrow \u00b7 tap for board', W/2, dyy+dh-6);
+  } else {
+    const dp = 0.85+0.15*Math.sin(titleBob*4);
+    cx.fillStyle=`rgba(232,87,77,${dp})`;
+    roundRect(dxx,dyy,dw,dh,12); cx.fill();
+    cx.fillStyle='#fff'; cx.font='13px "Press Start 2P", monospace';
+    cx.fillText('\u2600 DAILY RUN', W/2, dyy+dh/2+1);
+    cx.font='7px "Press Start 2P", monospace';
+    cx.fillStyle='rgba(255,255,255,0.8)';
+    cx.fillText('same world for everyone \u00b7 +50% fish', W/2, dyy+dh-6);
+  }
+  cx.textBaseline='alphabetic';
   // leaderboard + shop + name buttons
   const bw=240, bh=50, gapB=14, by=dyy+dh+12;
   const bx1 = W/2 - bw - gapB/2, bx2 = W/2 + gapB/2;
@@ -2292,6 +2313,7 @@ function frame(now){
       bestDayStreak = Math.max(bestDayStreak, m.bestDayStreak||0);
       bestDailyRank = m.bestDailyRank || bestDailyRank;
       if (m.lastDailyDate) lastDailyDate = m.lastDailyDate;
+      if (m.dailyDoneDate){ dailyDoneDate = m.dailyDoneDate; dailyDoneScore = m.dailyDoneScore||0; }
     }
     update(dt);
     render();
@@ -2349,7 +2371,10 @@ addEventListener('keydown', e=>{
   if (state==='shop'){ if (e.key==='Escape'||e.key==='Enter'||e.key===' ') state = 'title'; return; }
   if (state==='achv'){ if (e.key==='Escape'||e.key==='Enter'||e.key===' ') state = 'title'; return; }
   if (state==='over'){
-    if (e.key===' '||e.key==='Enter'||e.key==='ArrowUp') startPlay();
+    if (e.key===' '||e.key==='Enter'||e.key==='ArrowUp'){
+      if (dailyMode && dailyLocked()){ dailyMode = false; state = 'title'; }
+      else startPlay();
+    }
     if (e.key==='l'||e.key==='L') openBoard('over', dailyMode ? 'daily' : 'global');
     if ((e.key==='s'||e.key==='S') && dailyMode) copyShare();
     return;
@@ -2420,14 +2445,21 @@ cv.addEventListener('pointerdown', e=>{
     if (inRect(x,y,btnRects.mute)){ muted=!muted; return; }
   }
   if (state==='over'){
-    if (inRect(x,y,overBtn)) startPlay();          // same mode again
+    if (inRect(x,y,overBtn)){
+      if (dailyMode && dailyLocked()){ dailyMode = false; state = 'title'; }  // no daily replays
+      else startPlay();                                                        // same mode again
+    }
     else if (btnRects.overShare && inRect(x,y,btnRects.overShare)) copyShare();
     else if (inRect(x,y,btnRects.overBoard)) openBoard('over', dailyMode ? 'daily' : 'global');
     else if (inRect(x,y,btnRects.overMenu)){ dailyMode = false; state = 'title'; }
     return;
   }
   if (state==='title'){
-    if (inRect(x,y,btnRects.daily)){ startPlay(true); return; }
+    if (inRect(x,y,btnRects.daily)){
+      if (dailyLocked()) openBoard('title', 'daily');   // already played — show today's board
+      else startPlay(true);
+      return;
+    }
     if (inRect(x,y,btnRects.board)){ openBoard('title'); return; }
     if (inRect(x,y,btnRects.shop)){ state = 'shop'; return; }
     if (inRect(x,y,btnRects.achv)){ state = 'achv'; return; }
@@ -2521,7 +2553,8 @@ if (CONFIGURED && location.protocol !== 'file:') try {
         serverBest = d.score || 0;
         FB.meta = { bank: d.bank||0, chars: d.chars||null, sel: d.sel||'tibbs', items: d.items||null,
                     achieved: d.achieved||null, dayStreak: d.dayStreak||0, bestDayStreak: d.bestDayStreak||0,
-                    lastDailyDate: d.lastDailyDate||null, bestDailyRank: d.bestDailyRank||0 };
+                    lastDailyDate: d.lastDailyDate||null, bestDailyRank: d.bestDailyRank||0,
+                    dailyDoneDate: d.dailyDoneDate||null, dailyDoneScore: d.dailyDoneScore||0 };
       } else {
         FB.meta = { bank:0, chars:null, sel:'tibbs' };
       }
@@ -2544,6 +2577,8 @@ if (CONFIGURED && location.protocol !== 'file:') try {
       bestDayStreak: m.bestDayStreak||0,
       lastDailyDate: m.lastDailyDate||null,
       bestDailyRank: m.bestDailyRank||0,
+      dailyDoneDate: m.dailyDoneDate||null,
+      dailyDoneScore: m.dailyDoneScore||0,
       updatedAt: F.serverTimestamp(),
     }, { merge:true });
   };
