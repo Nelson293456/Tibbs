@@ -253,6 +253,7 @@ let hearts = 0, invuln = 0;                              // bell lives
 let zoomies = 0;                                          // golden-fish power-up timer
 let zoomiesHops = 0;                                      // rows gained during a zoomies burst
 let zoomiesAuto = 0;                                      // auto-hop cooldown while zooming
+let zoomiesElapsed = 0;                                    // total time this burst has run (hard cap)
 let lastSafe = null;                                     // last dry land {row, px}
 let newBestShown = false, lastMilestone = 0;
 
@@ -727,7 +728,7 @@ function resetGame(){
              hop:null, facing:'up', onLog:null, alive:true, visible:true };
   coinsGot = 0; maxRow = 0;
   hearts = 0; invuln = 0;
-  zoomies = 0; zoomiesHops = 0; zoomiesAuto = 0;
+  zoomies = 0; zoomiesHops = 0; zoomiesAuto = 0; zoomiesElapsed = 0;
   streak = 0; lastForwardAt = -9;
   rainSeed = dailyMode ? genRand()*1000 : Math.random()*1000;
   lastSafe = { row:1, px:colX(4) };
@@ -794,8 +795,13 @@ function collectAt(row, c){
     else { coinsGot += 3*fishMult; sfx.bell(); pop('+'+(3*fishMult)); }
   }
   if (kind==='gold'){
-    zoomies = 3.2; zoomiesHops = 0; zoomiesAuto = 0;
-    invuln = Math.max(invuln, 3.2);
+    if (zoomies > 0){
+      // already zooming — top up the timer but keep the elapsed ceiling
+      zoomies = Math.min(zoomies + 1.5, 3.2);
+    } else {
+      zoomies = 3.2; zoomiesHops = 0; zoomiesAuto = 0; zoomiesElapsed = 0;
+    }
+    invuln = Math.max(invuln, zoomies);
     sfx.rescue(); sfx.milk();
     effects.push({kind:'banner', text:'ZOOMIES!', t:0, dur:1.6});
     effects.push({kind:'stars', x:player.px, wy:player.wy, t:0});
@@ -1012,9 +1018,12 @@ function update(dt){
   if (state!=='play' && state!=='dead') return;
   if (coinsGot >= 50) unlockAch('fish50');
   if (invuln > 0) invuln = Math.max(0, invuln - dt);
-  // ZOOMIES: golden-fish power-up auto-dashes the cat forward, invincible
+  // ZOOMIES: golden-fish power-up auto-dashes the cat forward, invincible.
+  // Fixed duration, then always ends on guaranteed-safe ground.
   if (zoomies > 0){
     zoomies = Math.max(0, zoomies - dt);
+    zoomiesElapsed += dt;
+    if (zoomiesElapsed > 5) zoomies = 0;      // absolute ceiling — can't loop
     invuln = Math.max(invuln, 0.15);
     zoomiesAuto -= dt;
     if (!player.hop && zoomiesAuto <= 0){
@@ -1023,24 +1032,36 @@ function update(dt){
       if (player.hop || player.row > before) zoomiesHops++;
       zoomiesAuto = 0.09;   // rapid-fire hops
     }
-    // don't let the burst end while the cat is on/over water or mid-hop —
-    // keep it alive (and invincible) until it's safely on solid ground
     if (zoomies === 0){
-      const cur = rows[player.row];
-      const unsafe = player.hop ||
-        (cur && (cur.type==='river' || cur.type==='pond') && !player.onLog);
-      if (unsafe){
-        zoomies = 0.1;                 // extend until we reach dry land
-        invuln = Math.max(invuln, 0.2);
-      } else {
-        // safe landing: snap to a column centre + grace window
-        player.px = colX(clamp(Math.round((player.px-CELL/2)/CELL), PLAY_MIN, PLAY_MAX));
-        invuln = Math.max(invuln, 0.6);
-        lastSafe = { row:player.row, px:player.px };
-        if (zoomiesHops > 0){
-          pop('x'+zoomiesHops+' ZOOM', '#ffd94d');
-          if (zoomiesHops >= 12) unlockAch('zoomburst');
-        }
+      // land the in-progress hop onto its real destination tile
+      if (player.hop){
+        player.px = player.hop.toPx; player.row = player.hop.toRow; player.wy = player.hop.toWy;
+        player.hop = null;
+      }
+      player.onLog = null;
+      // is the cat's current tile safe to stand on?
+      const safeHere = (r)=>{
+        const row = rows[r];
+        if (!row) return false;
+        if (row.type==='grass' || row.type==='road') return true;   // road is safe to stand between cars; invuln covers the moment
+        return false;
+      };
+      if (!safeHere(player.row)){
+        // scan backward for the nearest solid ground and drop there
+        let target = null;
+        for (let r=player.row; r>=firstRow; r--){ if (safeHere(r)){ target = r; break; } }
+        if (target === null && lastSafe) target = lastSafe.row;
+        if (target === null) target = Math.max(firstRow, player.row-1);
+        player.row = target;
+        player.wy = target*CELL;
+        effects.push({kind:'ripple', x:player.px, wy:player.wy, t:0});
+      }
+      player.px = colX(clamp(Math.round((player.px-CELL/2)/CELL), PLAY_MIN, PLAY_MAX));
+      invuln = Math.max(invuln, 0.8);       // generous grace window to react
+      lastSafe = { row:player.row, px:player.px };
+      if (zoomiesHops > 0){
+        pop('x'+zoomiesHops+' ZOOM', '#ffd94d');
+        if (zoomiesHops >= 12) unlockAch('zoomburst');
       }
     }
   }
