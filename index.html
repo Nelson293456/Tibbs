@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>MR TIBBS — Crossy Cat</title>
+<title>Tibbsle — Daily Cat</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
@@ -895,20 +895,27 @@ function carScreenX(row, car){
 
 function buildShareText(){
   const cause = {
-    roomba:'\u{1F697} flattened', dog:'\u{1F415} bulldog', zoom:'\u{1F4A8} zoomies',
-    water:'\u{1F30A} splash', bird:'\u{1F426} birdnapped', behind:'\u{23F0} left behind',
-  }[deathCause] || '\u{1F480}';
+    roomba:'flattened by a roomba', dog:'caught by the bulldog', zoom:'zoomied out',
+    water:'fell in the water', bird:'birdnapped', behind:'left behind',
+  }[deathCause] || 'game over';
+  // Wordle-style grid using uniform-width square emoji so it always lines up
+  // 🟩 grass  🟥 road  🟦 river  🟪 pond  ⬜ zoomies
+  const sq = { grass:'\u{1F7E9}', road:'\u{1F7E5}', river:'\u{1F7E6}', pond:'\u{1F7EA}', zoom:'\u2B1C' };
+  const emoji = { '\u{1F7E9}':'grass','\u{1F697}':'road','\u{1F30A}':'river','\u{1F4A7}':'pond','\u{1F4A8}':'zoom' };
+  let squares = laneTrail.map(e => sq[emoji[e]] || sq.grass);
+  const capped = squares.length > 40;
+  if (capped) squares = squares.slice(-40);   // keep the final stretch
   let grid = '';
-  const trail = laneTrail.slice(0, 45);   // cap so the card isn't spammy
-  for (let i=0;i<trail.length;i+=9){
-    grid += trail.slice(i, i+9).join('') + '\n';
+  for (let i=0;i<squares.length;i+=10){
+    grid += squares.slice(i, i+10).join('') + '\n';
   }
-  if (laneTrail.length > 45) grid += '\u2026\n';
-  const site = (location && location.host) ? location.host : 'mr tibbs';
-  return `\u{1F408} Mr Tibbs Daily \u2014 ${dailyDate}\n`
-       + `Score ${maxRow} \u00b7 \u{1F41F}${coinsGot} \u00b7 ${cause}\n`
+  const site = (location && location.host) ? location.host : 'tibbsle.game';
+  return `Tibbsle ${dailyDate}\n`
+       + `Row ${maxRow}  \u{1F41F}${coinsGot}\n`
+       + (capped ? '\u2026\n' : '')
        + grid
-       + `Play: ${site}`;
+       + `${cause}\n`
+       + site;
 }
 async function copyShare(){
   const text = buildShareText();
@@ -1016,9 +1023,25 @@ function update(dt){
       if (player.hop || player.row > before) zoomiesHops++;
       zoomiesAuto = 0.09;   // rapid-fire hops
     }
-    if (zoomies === 0 && zoomiesHops > 0){
-      pop('x'+zoomiesHops+' ZOOM', '#ffd94d');
-      if (zoomiesHops >= 12) unlockAch('zoomburst');
+    // don't let the burst end while the cat is on/over water or mid-hop —
+    // keep it alive (and invincible) until it's safely on solid ground
+    if (zoomies === 0){
+      const cur = rows[player.row];
+      const unsafe = player.hop ||
+        (cur && (cur.type==='river' || cur.type==='pond') && !player.onLog);
+      if (unsafe){
+        zoomies = 0.1;                 // extend until we reach dry land
+        invuln = Math.max(invuln, 0.2);
+      } else {
+        // safe landing: snap to a column centre + grace window
+        player.px = colX(clamp(Math.round((player.px-CELL/2)/CELL), PLAY_MIN, PLAY_MAX));
+        invuln = Math.max(invuln, 0.6);
+        lastSafe = { row:player.row, px:player.px };
+        if (zoomiesHops > 0){
+          pop('x'+zoomiesHops+' ZOOM', '#ffd94d');
+          if (zoomiesHops >= 12) unlockAch('zoomburst');
+        }
+      }
     }
   }
 
@@ -1733,13 +1756,13 @@ function drawTitle(){
   cx.textAlign='center';
   cx.font='44px "Press Start 2P", monospace';
   cx.lineWidth = 10; cx.strokeStyle='#1b2029';
-  cx.strokeText('MR TIBBS', W/2, cy);
+  cx.strokeText('TIBBSLE', W/2, cy);
   cx.fillStyle='#ffd94d';
-  cx.fillText('MR TIBBS', W/2, cy);
+  cx.fillText('TIBBSLE', W/2, cy);
   cx.font='16px "Press Start 2P", monospace';
-  cx.lineWidth=6; cx.strokeText('~ crossy cat ~', W/2, cy+36);
+  cx.lineWidth=6; cx.strokeText('~ daily cat ~', W/2, cy+36);
   cx.fillStyle='#fff';
-  cx.fillText('~ crossy cat ~', W/2, cy+36);
+  cx.fillText('~ daily cat ~', W/2, cy+36);
   // paw prints
   cx.drawImage(S.paw, W/2-170, cy-46, 30, 30);
   cx.drawImage(S.paw, W/2+140, cy-46, 30, 30);
@@ -2267,9 +2290,19 @@ function startPlay(daily){
   // load the day's #1 ghost on a fresh daily entry (not on every retry re-fetch)
   if (dailyMode && daily === true){
     const F = fb();
-    if (F){ ghost = null; F.dailyGhost(dailyDate).then(g=>{ ghost = g; }).catch(()=>{ ghost = null; }); }
+    ghost = null; ghostActive = false;
+    if (F){
+      const forDate = dailyDate;
+      F.dailyGhost(forDate).then(g=>{
+        // only apply if we're still racing this same daily run
+        if (g && g.frames && g.frames.length && dailyMode && state==='play' && dailyDate===forDate){
+          ghost = g;
+          ghostActive = true;
+        }
+      }).catch(()=>{ ghost = null; });
+    }
   }
-  if (!dailyMode) ghost = null;
+  if (!dailyMode) { ghost = null; ghostActive = false; }
   resetGame();
   submitted = false;
   consumeBoosts();
